@@ -3530,6 +3530,14 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		zfs_rangelock_exit(lr);
 
 		if (wbc->sync_mode != WB_SYNC_NONE) {
+			/*
+			 * Do a commit to speed up the registered commit callback in order to get
+			 * the page out of the writeback state as soon as possible otherwise we may
+			 * need to wait for several seconds until the transaction group closes if the
+			 * currently active writeback was done with WB_SYNC_NONE.
+			 */
+			zil_commit(zfsvfs->z_log, zp->z_id);
+
 			if (PageWriteback(pp))
 				wait_on_page_bit(pp, PG_writeback);
 		}
@@ -3604,6 +3612,20 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		 * performance reasons.
 		 */
 		zil_commit(zfsvfs->z_log, zp->z_id);
+	} else {
+		/*
+		 * This is a workaround for an inherent race condition in filemap_write_and_wait_range()
+		 * where a new page writeback with WB_SYNC_NONE (ourself - the current thread) can start after
+		 * __filemap_fdatawrite_range() (the above WB_SYNC_ALL zil_commit() to be more precise)
+		 * but before filemap_fdatawait_range() (wait_on_page_writeback() to be more precise).
+		 *
+		 * By adding a small delay, we ensure that we can catch any waiters. If there are any,
+		 * we immediately do a commit to avoid making them wait for potentially several seconds
+		 * until the transaction group closes.
+		 */
+		udelay(10);
+		if (PageWaiters(pp))
+			zil_commit(zfsvfs->z_log, zp->z_id);
 	}
 
 	ZFS_EXIT(zfsvfs);
