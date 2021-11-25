@@ -86,5 +86,6 @@ SUBDIRS = \
 
 if BUILD_LINUX
 SUBDIRS += \
+	page_writeback \
 	tmpfile
 endif
