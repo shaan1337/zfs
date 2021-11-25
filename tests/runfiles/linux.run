@@ -124,6 +124,10 @@ tags = ['functional', 'mmp']
 tests = ['umount_unlinked_drain']
 tags = ['functional', 'mount']
 
+[tests/functional/page_writeback:Linux]
+tests = ['run_msync_test']
+tags = ['functional', 'page_writeback']
+
 [tests/functional/pam:Linux]
 tests = ['pam_basic', 'pam_nounmount']
 tags = ['functional', 'pam']
