@@ -175,6 +175,8 @@
  *	return (error);			// done, report error
  */
 
+unsigned int zfs_page_writeback_no_sync_delay_us = 20;
+
 /* ARGSUSED */
 int
 zfs_open(struct inode *ip, int mode, int flag, cred_t *cr)
@@ -3623,7 +3625,9 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		 * we immediately do a commit to avoid making them wait for potentially several seconds
 		 * until the transaction group closes.
 		 */
-		udelay(10);
+		if (zfs_page_writeback_no_sync_delay_us > 0)
+			udelay(MIN(zfs_page_writeback_no_sync_delay_us, 30));
+
 		if (PageWaiters(pp))
 			zil_commit(zfsvfs->z_log, zp->z_id);
 	}
@@ -4019,3 +4023,8 @@ MODULE_PARM_DESC(zfs_delete_blocks, "Delete files larger than N blocks async");
 /* END CSTYLED */
 
 #endif
+
+/* BEGIN CSTYLED */
+ZFS_MODULE_PARAM(zfs, zfs_page_writeback_, no_sync_delay_us, UINT, ZMOD_RW,
+	"Number of microseconds to delay non-sync page writebacks to catch any concurrent sync page writeback waiters");
+/* END CSTYLED */
