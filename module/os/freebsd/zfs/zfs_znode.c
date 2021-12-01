@@ -453,6 +453,8 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	zp->z_blksz = blksz;
 	zp->z_seq = 0x7A4653;
 	zp->z_sync_cnt = 0;
+	zp->z_sync_writes_cnt = 0;
+	zp->z_async_writes_cnt = 0;
 #if __FreeBSD_version >= 1300139
 	atomic_store_ptr(&zp->z_cached_symlink, NULL);
 #endif

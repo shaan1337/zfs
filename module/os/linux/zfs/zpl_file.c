@@ -127,16 +127,28 @@ static int
 zpl_fsync(struct file *filp, int datasync)
 {
 	struct inode *inode = filp->f_mapping->host;
+	znode_t *zp = ITOZ(inode);
+	zfsvfs_t *zfsvfs = ITOZSB(inode);
 	cred_t *cr = CRED();
 	int error;
 	fstrans_cookie_t cookie;
 
+	ZPL_ENTER(zfsvfs);
+	ZPL_VERIFY_ZP(zp);
+	atomic_inc_32(&zp->z_sync_writes_cnt);
+	ZPL_EXIT(zfsvfs);
+
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	error = -zfs_fsync(ITOZ(inode), datasync, cr);
+	error = -zfs_fsync(zp, datasync, cr);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 	ASSERT3S(error, <=, 0);
+
+	ZPL_ENTER(zfsvfs);
+	ZPL_VERIFY_ZP(zp);
+	atomic_dec_32(&zp->z_sync_writes_cnt);
+	ZPL_EXIT(zfsvfs);
 
 	return (error);
 }
@@ -161,9 +173,23 @@ static int
 zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 {
 	struct inode *inode = filp->f_mapping->host;
+	znode_t *zp = ITOZ(inode);
+	zfsvfs_t *zfsvfs = ITOZSB(inode);
 	cred_t *cr = CRED();
 	int error;
 	fstrans_cookie_t cookie;
+
+	ZPL_ENTER(zfsvfs);
+	ZPL_VERIFY_ZP(zp);
+	atomic_inc_32(&zp->z_sync_writes_cnt);
+	/*
+	 * speed up any non-sync page writebacks since
+	 * they may take several seconds to complete
+	 */
+	if (atomic_load_32(&zp->z_async_writes_cnt) > 0) {
+		zil_commit(zfsvfs->z_log, zp->z_id);
+	}
+	ZPL_EXIT(zfsvfs);
 
 	error = filemap_write_and_wait_range(inode->i_mapping, start, end);
 	if (error)
@@ -171,10 +197,15 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	error = -zfs_fsync(ITOZ(inode), datasync, cr);
+	error = -zfs_fsync(zp, datasync, cr);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 	ASSERT3S(error, <=, 0);
+
+	ZPL_ENTER(zfsvfs);
+	ZPL_VERIFY_ZP(zp);
+	atomic_dec_32(&zp->z_sync_writes_cnt);
+	ZPL_EXIT(zfsvfs);
 
 	return (error);
 }
@@ -651,14 +682,14 @@ zpl_readpages(struct file *filp, struct address_space *mapping,
 static int
 zpl_putpage(struct page *pp, struct writeback_control *wbc, void *data)
 {
-	struct address_space *mapping = data;
+	boolean_t *for_sync = data;
 	fstrans_cookie_t cookie;
 
 	ASSERT(PageLocked(pp));
 	ASSERT(!PageWriteback(pp));
 
 	cookie = spl_fstrans_mark();
-	(void) zfs_putpage(mapping->host, pp, wbc);
+	(void) zfs_putpage(pp->mapping->host, pp, wbc, *for_sync);
 	spl_fstrans_unmark(cookie);
 
 	return (0);
@@ -685,8 +716,9 @@ zpl_writepages(struct address_space *mapping, struct writeback_control *wbc)
 	 * we run it once in non-SYNC mode so that the ZIL gets all the data,
 	 * and then we commit it all in one go.
 	 */
+	boolean_t for_sync = (sync_mode == WB_SYNC_ALL);
 	wbc->sync_mode = WB_SYNC_NONE;
-	result = write_cache_pages(mapping, wbc, zpl_putpage, mapping);
+	result = write_cache_pages(mapping, wbc, zpl_putpage, &for_sync);
 	if (sync_mode != wbc->sync_mode) {
 		ZPL_ENTER(zfsvfs);
 		ZPL_VERIFY_ZP(zp);
@@ -702,7 +734,8 @@ zpl_writepages(struct address_space *mapping, struct writeback_control *wbc)
 		 * details). That being said, this is a no-op in most cases.
 		 */
 		wbc->sync_mode = sync_mode;
-		result = write_cache_pages(mapping, wbc, zpl_putpage, mapping);
+		result = write_cache_pages(mapping, wbc, zpl_putpage,
+		    &for_sync);
 	}
 	return (result);
 }
@@ -719,7 +752,9 @@ zpl_writepage(struct page *pp, struct writeback_control *wbc)
 	if (ITOZSB(pp->mapping->host)->z_os->os_sync == ZFS_SYNC_ALWAYS)
 		wbc->sync_mode = WB_SYNC_ALL;
 
-	return (zpl_putpage(pp, wbc, pp->mapping));
+	boolean_t for_sync = (wbc->sync_mode == WB_SYNC_ALL);
+
+	return (zpl_putpage(pp, wbc, &for_sync));
 }
 
 /*
