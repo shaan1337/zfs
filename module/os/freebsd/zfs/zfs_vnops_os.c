@@ -4742,9 +4742,23 @@ struct vop_fsync_args {
 static int
 zfs_freebsd_fsync(struct vop_fsync_args *ap)
 {
+	znode_t	*zp = VTOZ(ap->a_vp);
+	zfsvfs_t *zfsvfs = zp->z_zfsvfs;
+
+	ZFS_ENTER(zfsvfs);
+	ZFS_VERIFY_ZP(zp);
+	atomic_inc_32(&zp->z_sync_writes_cnt);
+	ZFS_EXIT(zfsvfs);
 
 	vop_stdfsync(ap);
-	return (zfs_fsync(VTOZ(ap->a_vp), 0, ap->a_td->td_ucred));
+	int error = (zfs_fsync(zp, 0, ap->a_td->td_ucred));
+
+	ZFS_ENTER(zfsvfs);
+	ZFS_VERIFY_ZP(zp);
+	atomic_dec_32(&zp->z_sync_writes_cnt);
+	ZFS_EXIT(zfsvfs);
+
+	return (error);
 }
 
 #ifndef _SYS_SYSPROTO_H_
