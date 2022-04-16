@@ -3396,7 +3396,7 @@ top:
 }
 
 static void
-zfs_putpage_commit_cb(void *arg)
+zfs_putpage_sync_commit_cb(void *arg)
 {
 	struct page *pp = arg;
 
@@ -3404,13 +3404,35 @@ zfs_putpage_commit_cb(void *arg)
 	end_page_writeback(pp);
 }
 
+static int
+zfs_putpage_async_commit_cb(void *arg)
+{
+	struct page	*pp = arg;
+
+	ClearPageError(pp);
+	end_page_writeback(pp);
+
+	struct inode	*ip = pp->mapping->host;
+	znode_t		*zp = ITOZ(ip);
+	zfsvfs_t	*zfsvfs = ITOZSB(ip);
+
+	ZFS_ENTER(zfsvfs);
+	ZFS_VERIFY_ZP(zp);
+	atomic_dec_32(&zp->z_async_writes_cnt);
+	ZFS_EXIT(zfsvfs);
+
+	return (0);
+}
+
 /*
  * Push a page out to disk, once the page is on stable storage the
  * registered commit callback will be run as notification of completion.
  *
- *	IN:	ip	- page mapped for inode.
- *		pp	- page to push (page is locked)
- *		wbc	- writeback control data
+ *	IN:	ip	 - page mapped for inode.
+ *		pp	 - page to push (page is locked)
+ *		wbc	 - writeback control data
+ *		for_sync - does the caller intend to wait synchronously for the
+ *			   page writeback to complete?
  *
  *	RETURN:	0 if success
  *		error code if failure
@@ -3419,7 +3441,8 @@ zfs_putpage_commit_cb(void *arg)
  *	ip - ctime|mtime updated
  */
 int
-zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
+zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
+    boolean_t for_sync)
 {
 	znode_t		*zp = ITOZ(ip);
 	zfsvfs_t	*zfsvfs = ITOZSB(ip);
@@ -3517,6 +3540,16 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		zfs_rangelock_exit(lr);
 
 		if (wbc->sync_mode != WB_SYNC_NONE) {
+			/*
+			 * speed up any non-sync page writebacks since
+			 * they may take several seconds to complete.
+			 * refer to the comment in zpl_fsync() (when
+			 * HAVE_FSYNC_RANGE is defined) for details.
+			 */
+			if (atomic_load_32(&zp->z_async_writes_cnt) > 0) {
+				zil_commit(zfsvfs->z_log, zp->z_id);
+			}
+
 			if (PageWriteback(pp))
 #ifdef HAVE_PAGEMAP_FOLIO_WAIT_BIT
 				folio_wait_bit(page_folio(pp), PG_writeback);
@@ -3542,6 +3575,8 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 	 * was in fact not skipped and should not be counted as if it were.
 	 */
 	wbc->pages_skipped--;
+	if (!for_sync)
+		atomic_inc_32(&zp->z_async_writes_cnt);
 	set_page_writeback(pp);
 	unlock_page(pp);
 
@@ -3559,6 +3594,8 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		__set_page_dirty_nobuffers(pp);
 		ClearPageError(pp);
 		end_page_writeback(pp);
+		if (!for_sync)
+			atomic_dec_32(&zp->z_async_writes_cnt);
 		zfs_rangelock_exit(lr);
 		ZFS_EXIT(zfsvfs);
 		return (err);
@@ -3583,7 +3620,9 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 	err = sa_bulk_update(zp->z_sa_hdl, bulk, cnt, tx);
 
 	zfs_log_write(zfsvfs->z_log, tx, TX_WRITE, zp, pgoff, pglen, 0,
-	    zfs_putpage_commit_cb, pp);
+	    for_sync ? zfs_putpage_sync_commit_cb :
+	    (void *) zfs_putpage_async_commit_cb, pp);
+
 	dmu_tx_commit(tx);
 
 	zfs_rangelock_exit(lr);
@@ -3593,6 +3632,16 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		 * Note that this is rarely called under writepages(), because
 		 * writepages() normally handles the entire commit for
 		 * performance reasons.
+		 */
+		zil_commit(zfsvfs->z_log, zp->z_id);
+	} else if (!for_sync && atomic_load_32(&zp->z_sync_writes_cnt) > 0) {
+		/*
+		 * If the caller does not intend to wait synchronously
+		 * for this page writeback to complete and there are active
+		 * synchronous calls on this file, do a commit so that
+		 * the latter don't accidentally end up waiting for
+		 * our writeback to complete. refer to the comment in
+		 * zpl_fsync() (when HAVE_FSYNC_RANGE is defined) for details.
 		 */
 		zil_commit(zfsvfs->z_log, zp->z_id);
 	}
