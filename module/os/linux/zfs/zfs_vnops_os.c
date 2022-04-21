@@ -3404,24 +3404,15 @@ zfs_putpage_sync_commit_cb(void *arg)
 	end_page_writeback(pp);
 }
 
-static int
+static void
 zfs_putpage_async_commit_cb(void *arg)
 {
-	struct page	*pp = arg;
+	struct page *pp = arg;
+	znode_t *zp = ITOZ(pp->mapping->host);
 
 	ClearPageError(pp);
 	end_page_writeback(pp);
-
-	struct inode	*ip = pp->mapping->host;
-	znode_t		*zp = ITOZ(ip);
-	zfsvfs_t	*zfsvfs = ITOZSB(ip);
-
-	ZFS_ENTER(zfsvfs);
-	ZFS_VERIFY_ZP(zp);
 	atomic_dec_32(&zp->z_async_writes_cnt);
-	ZFS_EXIT(zfsvfs);
-
-	return (0);
 }
 
 /*
@@ -3621,7 +3612,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
 
 	zfs_log_write(zfsvfs->z_log, tx, TX_WRITE, zp, pgoff, pglen, 0,
 	    for_sync ? zfs_putpage_sync_commit_cb :
-	    (void *) zfs_putpage_async_commit_cb, pp);
+	    zfs_putpage_async_commit_cb, pp);
 
 	dmu_tx_commit(tx);
 

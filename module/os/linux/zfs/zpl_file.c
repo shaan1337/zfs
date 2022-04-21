@@ -167,8 +167,6 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 	int error;
 	fstrans_cookie_t cookie;
 
-	ZPL_ENTER(zfsvfs);
-	ZPL_VERIFY_ZP(zp);
 	/*
 	 * The variables z_sync_writes_cnt and z_async_writes_cnt work in
 	 * tandem so that sync writes can detect if there are any non-sync
@@ -191,12 +189,9 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 	if (atomic_load_32(&zp->z_async_writes_cnt) > 0) {
 		zil_commit(zfsvfs->z_log, zp->z_id);
 	}
-	ZPL_EXIT(zfsvfs);
 
 	error = filemap_write_and_wait_range(inode->i_mapping, start, end);
 
-	ZPL_ENTER(zfsvfs);
-	ZPL_VERIFY_ZP(zp);
 	/*
 	 * The sync write is not complete yet but we decrement
 	 * z_sync_writes_cnt since zfs_fsync() increments and decrements
@@ -207,7 +202,6 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 	 * the non-sync write.
 	 */
 	atomic_dec_32(&zp->z_sync_writes_cnt);
-	ZPL_EXIT(zfsvfs);
 
 	if (error)
 		return (error);
