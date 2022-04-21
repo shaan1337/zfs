@@ -3541,9 +3541,9 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
 
 		if (wbc->sync_mode != WB_SYNC_NONE) {
 			/*
-			 * speed up any non-sync page writebacks since
+			 * Speed up any non-sync page writebacks since
 			 * they may take several seconds to complete.
-			 * refer to the comment in zpl_fsync() (when
+			 * Refer to the comment in zpl_fsync() (when
 			 * HAVE_FSYNC_RANGE is defined) for details.
 			 */
 			if (atomic_load_32(&zp->z_async_writes_cnt) > 0) {
@@ -3640,7 +3640,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
 		 * for this page writeback to complete and there are active
 		 * synchronous calls on this file, do a commit so that
 		 * the latter don't accidentally end up waiting for
-		 * our writeback to complete. refer to the comment in
+		 * our writeback to complete. Refer to the comment in
 		 * zpl_fsync() (when HAVE_FSYNC_RANGE is defined) for details.
 		 */
 		zil_commit(zfsvfs->z_log, zp->z_id);

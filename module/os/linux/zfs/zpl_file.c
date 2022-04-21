@@ -170,20 +170,20 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 	ZPL_ENTER(zfsvfs);
 	ZPL_VERIFY_ZP(zp);
 	/*
-	 * the variables z_sync_writes_cnt and z_async_writes_cnt work in
+	 * The variables z_sync_writes_cnt and z_async_writes_cnt work in
 	 * tandem so that sync writes can detect if there are any non-sync
-	 * writes going on and vice-versa. the "vice-versa" part to this logic
+	 * writes going on and vice-versa. The "vice-versa" part to this logic
 	 * is located in zfs_putpage() where non-sync writes check if there are
-	 * any ongoing sync writes. if any sync and non-sync writes overlap,
+	 * any ongoing sync writes. If any sync and non-sync writes overlap,
 	 * we do a commit to complete the non-sync writes since the latter can
 	 * potentially take several seconds to complete and thus block sync
 	 * writes in the upcoming call to filemap_write_and_wait_range().
 	 */
 	atomic_inc_32(&zp->z_sync_writes_cnt);
 	/*
-	 * if the following check does not detect an overlapping non-sync write
+	 * If the following check does not detect an overlapping non-sync write
 	 * (say because it's just about to start), then it is guaranteed that
-	 * the non-sync write will detect this sync write. this is because we
+	 * the non-sync write will detect this sync write. This is because we
 	 * always increment z_sync_writes_cnt / z_async_writes_cnt before doing
 	 * the check on z_async_writes_cnt / z_sync_writes_cnt here and in
 	 * zfs_putpage() respectively.
@@ -198,9 +198,9 @@ zpl_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 	ZPL_ENTER(zfsvfs);
 	ZPL_VERIFY_ZP(zp);
 	/*
-	 * the sync write is not complete yet but we decrement
+	 * The sync write is not complete yet but we decrement
 	 * z_sync_writes_cnt since zfs_fsync() increments and decrements
-	 * it internally. if a non-sync write starts just after the decrement
+	 * it internally. If a non-sync write starts just after the decrement
 	 * operation but before we call zfs_fsync(), it may not detect this
 	 * overlapping sync write but it does not matter since we have already
 	 * gone past filemap_write_and_wait_range() and we won't block due to
